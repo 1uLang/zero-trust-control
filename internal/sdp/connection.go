@@ -2,67 +2,62 @@ package sdp
 
 import (
 	"errors"
-	"github.com/1uLang/libnet/connection"
+	"fmt"
+	"github.com/1uLang/libnet"
+	"github.com/1uLang/libnet/utils/maps"
 	"github.com/1uLang/zero-trust-control/internal/clients"
 	"github.com/1uLang/zero-trust-control/internal/gateways"
-	"github.com/1uLang/zero-trust-control/internal/message"
-	"github.com/1uLang/zero-trust-control/utils/maps"
-)
-
-const (
-	connection_type = iota
-	connection_client
-	connection_gateway
+	message2 "github.com/1uLang/zero-trust-control/internal/message"
+	log "github.com/sirupsen/logrus"
+	"net"
 )
 
 type connect struct {
-	*connection.Connection
+	*libnet.Connection
 }
 
-func newConnection(c *connection.Connection) connect {
-	return connect{c}
+func newConnection(c *libnet.Connection) *connect {
+	return &connect{c}
 }
 
 // 处理消息
-func (this *connect) onMessage(msg *message.Message) {
-	switch msg.Code {
-	case message.LoginRequestCode:
+func (this *connect) onMessage(msg *message2.Message) {
+	switch msg.MsgId() {
+	case message2.LoginRequestCode:
 		this.handleLoginMessage(msg)
-	case message.KeepaliveRequestCode:
+	case message2.KeepaliveRequestCode:
 		this.handleKeepaliveMessage(msg)
-	case message.AHLogoutRequestCode:
+	case message2.AHLogoutRequestCode:
 		this.handleAHLogoutMessage(msg)
-	case message.IHLogoutRequestCode:
+	case message2.IHLogoutRequestCode:
 		this.handleIHLogoutMessage(msg)
-	case message.CustomRequestCode:
+	case message2.CustomRequestCode:
 		this.handleCustomMessage(msg)
 	}
 }
 
 // 控制器 处理ih/ah 登录消息
-func (this *connect) handleLoginMessage(msg *message.Message) {
+func (this *connect) handleLoginMessage(msg *message2.Message) {
 	isOk := false
 	var code int
 	var isClient bool
 	var isGateway bool
-	data, err := msg.DecodeOptions()
+	data, err := msg.DecodeData()
 	if err != nil {
 		this.replyError("msg decode options err : " + err.Error())
 		return
 	}
-	// 加入认证丢包重发机制
-	resend := 5
 	defer func() {
 		if !isOk {
 			_ = this.Close("handleAuthMessage failed")
 		}
 	}()
 	replyMap := maps.Map{}
-
-	if data.GetInt("type") == connection_client {
+	fmt.Println("===== new login message data:", data)
+	if data.GetInt("type") == message2.ConnectionClient {
 		isClient = true
 		code, err = clients.Login(data)
-	} else if data.GetInt("type") == connection_gateway {
+	} else if data.GetInt("type") == message2.ConnectionGateway {
 		isGateway = true
 		code, err = gateways.Login(data)
 	} else {
@@ -79,20 +74,14 @@ func (this *connect) handleLoginMessage(msg *message.Message) {
 		"code":    code,
 		"message": err.Error(),
 	}
-	reply := &message.Message{
-		Code: message.LoginResponseCode,
+	reply := &message2.Message{
+		Type: message2.LoginResponseCode,
 		Data: replyMap.AsJSON(),
 	}
-SEND:
 	_, err = this.writeClient(reply.Marshal())
 	if err != nil {
-		resend--
-		if resend > 0 {
-			goto SEND
-		} else {
-			this.replyError("write client err : " + err.Error())
-			return
-		}
+		this.replyError("write client err : " + err.Error())
+		return
 	}
 	isOk = true
 	if isClient {
@@ -103,12 +92,11 @@ SEND:
 }
 
 // 控制器 处理心跳
-func (this *connect) handleKeepaliveMessage(msg *message.Message) {
-	//todo: 续租 redis中 网关/客户端 认证信息
+func (this *connect) handleKeepaliveMessage(msg *message2.Message) {
 }
 
 // 控制器 自定义消息
-func (this *connect) handleCustomMessage(msg *message.Message) {
+func (this *connect) handleCustomMessage(msg *message2.Message) {
 	//todo: 处理自定义消息
 }
 
@@ -121,29 +109,64 @@ func (this *connect) handleClientLogin(m maps.Map) {
 // 控制器 处理网关登录消息
 func (this *connect) handleGatewayLogin(m maps.Map) {
 	//todo: 向网关发送其保护的源站服务信息
+
+	reply := &message2.Message{
+		Type: message2.LoginResponseCode,
+		Data: maps.Map{
+			"ips": []string{"182.150.0.71"},
+		}.AsJSON(),
+	}
+	_, err := this.writeClient(reply.Marshal())
+	if err != nil {
+		this.replyError("[gateway login response]write client err : " + err.Error())
+		return
+	}
 }
 
 // 控制器 处理网关注销消息
-func (this *connect) handleAHLogoutMessage(msg *message.Message) {
+func (this *connect) handleAHLogoutMessage(msg *message2.Message) {
 	//todo: 向网关发送其保护的源站服务信息
 }
 
 // 控制器 处理客户端注销消息
-func (this *connect) handleIHLogoutMessage(msg *message.Message) {
+func (this *connect) handleIHLogoutMessage(msg *message2.Message) {
 	//todo: 向网关发送其保护的源站服务信息
 }
 
 // 向客户端回复错误信息
 func (this *connect) writeClient(msg []byte) (n int, err error) {
 
-	return this.Write(msg)
+	// 加入认证丢包重发机制
+	resend := 5
+SEND:
+	n, err = this.Write(msg)
+	if err != nil {
+		resend--
+		if resend > 0 {
+			goto SEND
+		} else {
+			return
+		}
+	}
+	return
 }
 func (this *connect) replyError(msg string) {
-	reply := &message.Message{
-		Code: message.CustomRequestCode,
+	reply := &message2.Message{
+		Type: message2.CustomRequestCode,
 		Data: maps.Map{
 			"error": msg,
 		}.AsJSON(),
 	}
 	_, _ = this.Write(reply.Marshal())
+}
+
+func (this *connect) onError(err error) {
+	if err == nil {
+		return
+	}
+	_, ok := err.(*net.OpError)
+	if !ok {
+		log.Fatal(err)
+	}
+	_ = this.Close("onError: " + err.Error())
 }

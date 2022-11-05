@@ -6,51 +6,53 @@ import (
 	"errors"
 	"fmt"
 	"github.com/1uLang/libnet"
-	"github.com/1uLang/libnet/connection"
 	"github.com/1uLang/libnet/encrypt"
+	"github.com/1uLang/libnet/message"
 	"github.com/1uLang/libnet/options"
-	"github.com/1uLang/zero-trust-control/internal/message"
+	message2 "github.com/1uLang/zero-trust-control/internal/message"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"os"
 )
 
 type server struct {
-	clientBuffer *message.Buffer
 }
 
 var svr = server{}
 
-func (this server) OnConnect(conn *connection.Connection) {
-
-}
-
-func (this server) OnMessage(c *connection.Connection, bytes []byte) {
+func (this server) OnConnect(conn *libnet.Connection) {
+	log.Info("[SDP Serve]new connection ", conn.RemoteAddr())
 	// setup buffer
-	this.clientBuffer = message.NewBuffer()
-	this.clientBuffer.OnMessage(newConnection(connect).onMessage)
-	if len(bytes) > 0 {
-		this.clientBuffer.Write(bytes)
+	c := newConnection(conn)
+	buffer := message.NewBuffer(message2.CheckHeader)
+	buffer.OptValidateId = true
+	buffer.OnMessage(func(msg message.MessageI) {
+		c.onMessage(msg.(*message2.Message))
+	})
+	buffer.OnError(c.onError)
+	err := conn.SetBuffer(buffer)
+	if err != nil {
+		log.Fatal("[SDP Serve] set connection buffer error", err)
+		conn.Close("set connection buffer" + err.Error())
 	}
 }
 
-func (this server) OnClose(conn *connection.Connection, err error) {
+func (this server) OnMessage(c *libnet.Connection, bytes []byte) {}
+
+func (this server) OnClose(conn *libnet.Connection, reason string) {
+
+	log.Warn("[SDP Serve]close connection ", conn.RemoteAddr(), "  ", reason)
 }
 
 func RunServe() error {
 
-	method, err := encrypt.NewMethod(viper.GetString("sdp.encrypt.method"))
-	if err != nil {
-		return errors.New("获取本地IP失败：" + err.Error())
-	}
-	sdpSvr, err := libnet.NewServe(fmt.Sprintf(":%d", viper.GetInt("sdp.port")), svr,
-		options.WithEncryptMethod(method),
-		options.WithEncryptMethodPublicKey([]byte(viper.GetString("sdp.encrypt.key"))),
-		options.WithEncryptMethodPrivateKey([]byte(viper.GetString("sdp.encrypt.iv"))),
-	)
-	if err != nil {
-		log.Fatal("[SDP Control] start serve failed : ", err)
-		return err
+	opts := []options.Option{}
+	if viper.GetString("sdp.encrypt.method") != "" {
+		method, err := encrypt.NewMethodInstance(viper.GetString("sdp.encrypt.method"), viper.GetString("sdp.encrypt.key"), viper.GetString("sdp.encrypt.key"))
+		if err != nil {
+			return errors.New("初始化加密方法错误：" + err.Error())
+		}
+		opts = append(opts, options.WithEncryptMethod(method))
 	}
 	caCertFile, err := os.ReadFile(viper.GetString("sdp.ca"))
 	if err != nil {
@@ -81,5 +83,5 @@ func RunServe() error {
 		},
 		InsecureSkipVerify: true,
 	}
-	return sdpSvr.RunTLS(tlsConfig)
+	return libnet.NewServe(fmt.Sprintf(":%d", viper.GetInt("sdp.port")), svr, opts...).RunTLS(tlsConfig)
 }

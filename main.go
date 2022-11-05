@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	cfgFile = flag.String("c", "config.yaml", "set config file")
+	cfgFile = flag.String("c", "./config/config.yaml", "set config file")
 )
 
 func main() {
@@ -26,9 +26,13 @@ func main() {
 		log.Fatal("init redis failed : ", err)
 		return
 	}
-	// 启动 spa 服务
-	go spa.RunServe()
-
+	go func() {
+		// 启动 spa 服务
+		if err := spa.RunServe(); err != nil {
+			log.Fatal("run  udp serve failed : ", err)
+			return
+		}
+	}()
 	// 启动 sdp 服务
 	sdp.RunServe()
 }

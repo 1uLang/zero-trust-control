@@ -2,7 +2,7 @@
 debug : true
 #超时时间： connect 连接sdp控制器时间/spa认证生效时间/与sdp控制器的心跳时间/客户端spa认证超时
 timeout:
-    connect: 3
+    connect: 0
     spa: 30
     keepalive: 30
     authority: 30
@@ -10,32 +10,32 @@ timeout:
 spa:
     port: 24397
     protocol: "udp"
-    method: "aes-256-cfb"
-    key: "f1c8eafb543f03023e97b7be864a4e9b"
-    iv: "f1c8eafb543f03023e97b7be864a4e9b"
+#    method: "aes-256-cfb"
+#    key: "f1c8eafb543f03023e97b7be864a4e9b"
+#    iv: "f1c8eafb543f03023e97b7be864a4e9b"
     allow:
         tcpPort:
-            - 20001
-            - 20002
-        udpPort:
-            - 20003
-            - 20004
+            - 24398
+#            - 20002
+#         udpPort:
+#            - 20003
+#            - 20004
 
 #sdp相关配置信息
 sdp:
     port: 24398
-    encrypt:
-        method: "aes-256-cfb"
-        key: "f1c8eafb543f03023e97b7be864a4e9b"
-        iv: "f1c8eafb543f03023e97b7be864a4e9b"
+#    encrypt:
+#        method: "aes-256-cfb"
+#        key: "f1c8eafb543f03023e97b7be864a4e9b"
+#        iv: "f1c8eafb543f03023e97b7be864a4e9b"
     ca: "./certs/ca.crt"
-    cert: "./certs/client.crt"
-    key: "./certs/client.key"
+    cert: "./certs/server.crt"
+    key: "./certs/server.key"
 #redis数据库配置信息
 redis:
     #redis地址
     addr: "127.0.0.1:6379"
-    password: "1232345342675"
+#    password: "1232345342675"
   #redis数据库编号1-16取值
     db: 0
   #连接池配额

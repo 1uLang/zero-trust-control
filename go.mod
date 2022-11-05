@@ -2,9 +2,12 @@ module github.com/1uLang/zero-trust-control
 
 go 1.19
 
+//replace github.com/1uLang/libnet => ../libnet
+//replace github.com/1uLang/libspa => ../libspa
+
 require (
-	github.com/1uLang/libnet v0.0.0-20221031130947-0cc138064361
-	github.com/1uLang/libspa v0.0.0-20221031125121-c9b6087ecd15
+	github.com/1uLang/libnet v0.0.0-20221105064352-b693b6cbf0c7
+	github.com/1uLang/libspa v0.0.0-20221103132053-127d898ea7e8
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/shirou/gopsutil v3.21.11+incompatible
 	github.com/sirupsen/logrus v1.9.0

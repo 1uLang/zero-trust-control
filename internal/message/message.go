@@ -2,14 +2,34 @@ package message
 
 import (
 	"encoding/binary"
-	"encoding/json"
-	"github.com/1uLang/zero-trust-control/utils/maps"
+	"errors"
+	"github.com/1uLang/libnet/message"
+	"github.com/1uLang/libnet/utils/maps"
+	"sync/atomic"
 )
 
 const (
-	MessageHeaderLength = 5
-	MessageLengthIndex  = 2
+	MessageVersion = 0x1 // 版本， 0-f
 
+	MessageIdIndex      = 1
+	MessageTypeIndex    = 9
+	MessageLengthIndex  = 10
+	MessageHeaderLength = 14
+)
+
+// Message tls 通讯消息体
+// Type：
+// 0x00 AH 登录信息包  AH ----> 控制器
+// 0x01 控制器 AH登录响应包  控制器 ------> AH
+// 0x02 AH 登出响应包 AH  --------> 控制器
+// 0x03 AH/控制器 keepalive 心跳包
+// 0x04 AH AH服务信息包
+const (
+	ConnectionType = iota
+	ConnectionClient
+	ConnectionGateway
+)
+const (
 	LoginRequestCode         = 0x00 //ah/ih ----> control 登录消息
 	LoginResponseCode        = 0x01 //control ----> ah/ih 登录响应消息
 	AHLogoutRequestCode      = 0x02 // ah ----> control 注销消息
@@ -22,53 +42,50 @@ const (
 	CustomRequestCode        = 0xff // 自定义消息
 )
 
-/*
+var (
+	ErrBufferInvalidIsNil  = errors.New("buffer: invalid is nil ")
+	ErrBufferInvalidStart  = errors.New("buffer: invalid start byte")
+	ErrBufferInvalidHeader = errors.New("buffer: invalid header")
+	ErrBufferDataTooLong   = errors.New("buffer: data too long bytes")
+)
 
-	CONTROL ____________
-	|					|
-	↓					↓
-	IH --------------> AH
-*/
+var (
+	messageId = uint64(0)
+)
 
-// Message tls 通讯消息体
-// Code：
-// 0x00 AH 登录信息包  AH ----> 控制器
-// 0x01 控制器 AH登录响应包  控制器 ------> AH
-// 0x02 AH 登出响应包 AH  --------> 控制器
-// 0x03 AH/控制器 keepalive 心跳包
-// 0x04 AH AH服务信息包
 type Message struct {
-	Code   uint8  `json:"code"`   // 消息类型  0x00 0x01 0x02
-	Length uint32 `json:"length"` // 消息体长度
-	Data   []byte `json:"data"`   // 消息体
+	Version byte
+	Id      uint64
+	Type    byte
+	Length  uint32
+	Data    []byte
 }
 
-// 解析选项
-// 选项格式：[4字节选项内容长度] [ 选项内容 ] [数据]
-func (this *Message) DecodeOptions() (maps.Map, error) {
-	if len(this.Data) < 4 {
-		return nil, nil
-	}
-
-	length := binary.BigEndian.Uint32(this.Data[:4])
-	if length == 0 {
-		return nil, nil
-	}
-
-	data := this.Data[4 : 4+length]
-	options := maps.Map{}
-	err := json.Unmarshal(data, &options)
-
-	this.Data = this.Data[4+length:]
-
-	return options, err
+// DecodeData 解析data
+func (this *Message) DecodeData() (maps.Map, error) {
+	return maps.DecodeJSON(this.Data)
 }
 
-// 编码消息
+// Marshal 编码消息
 func (this *Message) Marshal() []byte {
-	result := []byte{this.Code}
+
+	if this.Id <= 0 {
+		this.Id = atomic.AddUint64(&messageId, 1)
+	}
+
+	if this.Version == 0 {
+		this.Version = MessageVersion
+	}
+	result := []byte{this.Version}
+
 	// ID
-	buf := make([]byte, 4)
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, this.Id)
+	result = append(result, buf...)
+
+	// Type
+	result = append(result, this.Type)
+
 	// Length
 	this.Length = uint32(len(this.Data))
 	binary.BigEndian.PutUint32(buf, this.Length)
@@ -77,4 +94,55 @@ func (this *Message) Marshal() []byte {
 	// Data
 	result = append(result, this.Data...)
 	return result
+}
+
+// MsgId 获取消息ID
+func (this *Message) MsgId() uint64 {
+	return this.Id
+}
+
+// SetData 设置消息体
+func (this *Message) SetData(buf []byte) {
+	if this.Data == nil {
+		this.Data = buf
+	} else {
+		this.Data = append(this.Data, buf...)
+	}
+}
+
+// HeaderLength 获取消息头长度
+func (this *Message) HeaderLength() uint32 {
+	return MessageHeaderLength
+}
+
+// GetLength 获取消息体长度
+func (this *Message) GetLength() uint32 {
+	return this.Length
+}
+
+// CheckHeader 分析并检测消息头
+func CheckHeader(buf []byte) (message.MessageI, error) {
+	msg := Message{}
+	if buf == nil && len(buf) == 0 {
+		return nil, ErrBufferInvalidIsNil
+	}
+	msg.Version = buf[0]
+	// 检查消息版本
+	if len(buf) > 0 && buf[0] != MessageVersion {
+		return nil, ErrBufferInvalidStart
+	}
+
+	if len(buf) < MessageHeaderLength {
+		return nil, ErrBufferInvalidHeader
+	}
+
+	l := binary.BigEndian.Uint32(buf[MessageLengthIndex : MessageLengthIndex+4])
+	if l > message.MaxBufferSize { // 每次通讯数据不超过一定尺寸
+		return nil, ErrBufferDataTooLong
+	}
+	msg.Length = l
+	// 解析Header
+	msg.Id = binary.BigEndian.Uint64(buf[MessageIdIndex : MessageIdIndex+8])
+	msg.Type = buf[MessageTypeIndex]
+	return &msg, nil
 }
